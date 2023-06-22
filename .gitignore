@@ -1,0 +1,10 @@
+*
+!/**/
+!*.*
+!makefile
+
+/not mine
+
+.vscode
+*.txt
+*.o
