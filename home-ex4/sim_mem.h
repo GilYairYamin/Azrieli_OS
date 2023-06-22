@@ -24,8 +24,6 @@ private:
 	int size;
 	int values[MEMORY_SIZE];
 
-	void shift_left(int i);
-
 public:
 	int peek();
 	void enqueue(int value);

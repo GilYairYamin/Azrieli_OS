@@ -1,5 +1,10 @@
 #include "sim_mem.h"
 
+#define SUCCESS 0
+#define ERROR 1
+
+#define DEFAULT_SWAP_INDEX -1
+
 #define TEXT_INDEX 0
 #define DATA_INDEX 1
 #define BSS_INDEX 2
@@ -12,8 +17,6 @@
 
 #define LOAD_OP 0
 #define STORE_OP 1
-
-#define INIT_VALS = ""
 
 void custom_queue::enqueue(int value) {
 	this->remove(value);
@@ -71,53 +74,53 @@ int sim_mem::init_alloc_memory() {
 	this->page_table = (page_descriptor**)calloc(sizeof(page_descriptor*), OUTER_PAGE_AMOUNT);
 	if (this->page_table == NULL) {
 		perror("memory allocation error - outer page table");
-		return 1;
+		return ERROR;
 	}
 
 	for (int outer = 0; outer < OUTER_PAGE_AMOUNT; outer++) {
 		this->page_table[outer] = (page_descriptor*)calloc(sizeof(page_descriptor), nums[outer]);
 		if (this->page_table[outer] == NULL) {
 			perror("memory allocation error - inner page table\n");
-			return 1;
+			return ERROR;
 		}
 	}
 
 	this->used_frames_main_memory = (bool*)calloc(sizeof(bool), MEMORY_SIZE / this->page_size);
 	if (this->used_frames_main_memory == NULL) {
 		perror("memory allocation error - available frames\n");
-		return 1;
+		return ERROR;
 	}
 
 	int num_of_max_pages_in_swap = (this->data_size + this->bss_size + this->heap_stack_size) / this->page_size;
 	this->used_frames_swap = (bool*)calloc(sizeof(bool), num_of_max_pages_in_swap);
 	if (this->used_frames_main_memory == NULL) {
 		perror("memory allocation error - available frames\n");
-		return 1;
+		return ERROR;
 	}
 
 	this->last_recently_used = (custom_queue*)calloc(sizeof(custom_queue), 1);
 
 	if (this->last_recently_used == NULL) {
 		perror("memory allocation error - least recently used\n");
-		return 1;
+		return ERROR;
 	}
-	return 0;
+	return SUCCESS;
 }
 
 int sim_mem::init_open_fds(char exe_file_name[], char swap_file_name[]) {
 	this->program_fd = open(exe_file_name, O_RDONLY, S_IRUSR | S_IRGRP | S_IROTH);
 	if (this->program_fd < 0) {
 		perror("couldn't open executable file\n");
-		return 1;
+		return ERROR;
 	}
 
 	this->swapfile_fd = open(swap_file_name, O_RDWR | O_CREAT, 0666);
 	if (this->swapfile_fd < 0) {
 		perror("couldn't open program file\n");
-		return 1;
+		return ERROR;
 	}
 
-	return 0;
+	return SUCCESS;
 }
 
 void sim_mem::init_masks() {
@@ -195,9 +198,8 @@ sim_mem::sim_mem(char exe_file_name[], char swap_file_name[], int text_size,
 	memset(main_memory, 0, MEMORY_SIZE);
 
 	int num_of_max_pages_in_swap = (this->data_size + this->bss_size + this->heap_stack_size) / this->page_size;
-	char zeroByte = 0;
-	lseek(this->swapfile_fd, 0, SEEK_SET);
 
+	lseek(this->swapfile_fd, 0, SEEK_SET);
 	for (int i = 0; i < num_of_max_pages_in_swap; i++) {
 		if (write(this->swapfile_fd, main_memory, this->page_size) < 0) {
 			fprintf(stderr, "writing error to swap file\n");
@@ -220,11 +222,11 @@ int sim_mem::find_page_using_frame(int frame, int& outer, int& inner) {
 			if (p->valid == true && p->frame == frame) {
 				outer = o;
 				inner = i;
-				return 0;
+				return SUCCESS;
 			}
 		}
 	}
-	return 1;
+	return ERROR;
 }
 
 int sim_mem::swap_page_out(int frame) {
@@ -232,18 +234,18 @@ int sim_mem::swap_page_out(int frame) {
 	int inner = 0;
 	if (this->find_page_using_frame(frame, outer, inner)) {
 		fprintf(stderr, "couldn't find page using frame\n");
-		return 1;
+		return ERROR;
 	}
 
 	if (outer == TEXT_INDEX) {
 		this->update_page_table_swapped(outer, inner, -1);
-		return 0;
+		return SUCCESS;
 	}
 
 	int swap_frame = this->find_empty_swap_page();
 	if (swap_frame < 0) {
 		fprintf(stderr, "couldn't find empty swap page\n");
-		return 1;
+		return SUCCESS;
 	}
 
 	int swap_offset = swap_frame * this->page_size;
@@ -252,11 +254,11 @@ int sim_mem::swap_page_out(int frame) {
 	lseek(this->swapfile_fd, swap_offset, SEEK_SET);
 	if (write(this->swapfile_fd, &main_memory[main_offset], this->page_size) < 0) {
 		fprintf(stderr, "writing error to swap file\n");
-		return 1;
+		return ERROR;
 	}
 
 	this->update_page_table_swapped(outer, inner, swap_frame);
-	return 0;
+	return SUCCESS;
 }
 
 int sim_mem::find_empty_swap_page() {
@@ -296,9 +298,9 @@ int sim_mem::find_empty_frame() {
 void sim_mem::update_page_table_swapped(int outer, int inner, int swap_frame) {
 	int frame = this->page_table[outer][inner].frame;
 
-	this->page_table[outer][inner].frame = 0;
 	this->page_table[outer][inner].valid = false;
 	this->page_table[outer][inner].dirty = true;
+	this->page_table[outer][inner].frame = 0;
 	this->page_table[outer][inner].swap_index = swap_frame;
 
 	if (swap_frame < 0)
@@ -316,7 +318,7 @@ void sim_mem::update_page_table_added_to_memory(int outer, int inner, int frame)
 	this->page_table[outer][inner].valid = true;
 	this->page_table[outer][inner].dirty = false;
 	this->page_table[outer][inner].frame = frame;
-	this->page_table[outer][inner].swap_index = -1;
+	this->page_table[outer][inner].swap_index = DEFAULT_SWAP_INDEX;
 
 	this->used_frames_main_memory[frame] = true;
 	if (swap_frame >= 0)
@@ -329,7 +331,7 @@ int sim_mem::copy_page_from_exe(int outer, int inner) {
 	int empty_frame = this->find_empty_frame();
 	if (empty_frame < 0) {
 		fprintf(stderr, "what the heck?!\n");
-		return 1;
+		return ERROR;
 	}
 
 	int swap_offset = (outer == TEXT_INDEX) ? 0 : this->text_size;
@@ -339,19 +341,19 @@ int sim_mem::copy_page_from_exe(int outer, int inner) {
 	lseek(this->program_fd, swap_offset, SEEK_SET);
 	if (read(this->program_fd, &main_memory[main_offset], this->page_size) == -1) {
 		fprintf(stderr, "reading error from execution file\n");
-		return 1;
+		return ERROR;
 	}
 
 	this->page_table[outer][inner].swap_index = -1;
 	this->update_page_table_added_to_memory(outer, inner, empty_frame);
-	return 0;
+	return SUCCESS;
 }
 
 int sim_mem::bring_page_from_swap(int outer, int inner) {
 	int empty_frame = this->find_empty_frame();
 	if (empty_frame < 0) {
 		fprintf(stderr, "what the heck?!\n");
-		return 1;
+		return ERROR;
 	}
 
 	int swap_offset = page_table[outer][inner].swap_index * this->page_size;
@@ -360,7 +362,7 @@ int sim_mem::bring_page_from_swap(int outer, int inner) {
 	lseek(this->swapfile_fd, swap_offset, SEEK_SET);
 	if (read(this->swapfile_fd, &main_memory[main_offset], this->page_size) < 0) {
 		fprintf(stderr, "reading error from swap file\n");
-		return 1;
+		return ERROR;
 	}
 	this->update_page_table_added_to_memory(outer, inner, empty_frame);
 
@@ -368,36 +370,37 @@ int sim_mem::bring_page_from_swap(int outer, int inner) {
 	lseek(this->swapfile_fd, swap_offset, SEEK_SET);
 	if (write(this->swapfile_fd, zeroByte, this->page_size) < 0) {
 		fprintf(stderr, "writing error to swap file\n");
-		return 1;
+		return ERROR;
 	}
-	return 0;
+	return SUCCESS;
 }
 
 int sim_mem::init_new_page(int outer, int inner) {
 	int empty_frame = this->find_empty_frame();
 	if (empty_frame < 0) {
 		fprintf(stderr, "what the heck?!\n");
-		return 1;
+		return ERROR;
 	}
 
 	int main_offset = empty_frame * this->page_size;
 	memset(&main_memory[main_offset], 0, this->page_size);
 
-	this->page_table[outer][inner].swap_index = -1;
+	this->page_table[outer][inner].swap_index = DEFAULT_SWAP_INDEX;
 	this->update_page_table_added_to_memory(outer, inner, empty_frame);
 
-	return 0;
+	return SUCCESS;
 }
 
 int sim_mem::setup_page(int outer, int inner, int op) {
 	if (page_table[outer][inner].valid) {
 		this->last_recently_used->enqueue(page_table[outer][inner].frame);
-		return 0;
+		return SUCCESS;
 	}
 
 	if (outer == TEXT_INDEX) {
 		if (op == STORE_OP) {
-			fprintf(stderr, "attempt to write to exec file");
+			fprintf(stderr, "attempt to write to exec file\n");
+			return ERROR;
 		}
 		return this->copy_page_from_exe(outer, inner);
 	}
@@ -417,13 +420,13 @@ int sim_mem::setup_page(int outer, int inner, int op) {
 	if (outer == STACK_HEAP_INDEX) {
 		if (op == LOAD_OP) {
 			fprintf(stderr, "attempt to read from uninitialized memory\n");
-			return 1;
+			return ERROR;
 		}
 		return this->init_new_page(outer, inner);
 	}
 
 	fprintf(stderr, "unknown error, what?!\n");
-	return 1;
+	return ERROR;
 }
 
 bool sim_mem::is_valid_address(int outer, int inner, int offset) {
@@ -462,7 +465,6 @@ char sim_mem::load(int address) {
 	}
 
 	int frame_start = this->page_table[outer][inner].frame * this->page_size;
-	printf("outer: %d, inner: %d, offset: %d, frame start: %d\n", outer, inner, frame_offset, frame_start);
 	return main_memory[frame_start + frame_offset];
 }
 
@@ -480,7 +482,6 @@ void sim_mem::store(int address, char value) {
 	}
 
 	int frame_start = this->page_table[outer][inner].frame * this->page_size;
-	printf("outer: %d, inner: %d, offset: %d, frame start: %d\n", outer, inner, frame_offset, frame_start);
 	main_memory[frame_start + frame_offset] = value;
 }
 
@@ -503,19 +504,19 @@ void sim_mem::print_memory() {
 
 /************************************************************************************/
 void sim_mem::print_swap() {
-	int i;
 	char* str = (char*)malloc(this->page_size * sizeof(char));
 
 	printf("\n Swap memory \n");
 	lseek(this->swapfile_fd, 0, SEEK_SET); // go to the start of the file
 
 	while (read(this->swapfile_fd, str, this->page_size) == this->page_size) {
-		for (i = 0; i < this->page_size; i++) {
+		for (int i = 0; i < this->page_size; i++) {
 			char c = (str[i] == '\0') ? '_' : str[i];
 			printf("%c", c);
 		}
 		printf("\n");
 	}
+	printf("\n");
 
 	free(str);
 }
