@@ -8,8 +8,6 @@
 
 #define MEM_ALLOC_ERR 12
 
-
-
 // ========= global_variables.h =========
 
 // #include "general_includes.h"
@@ -87,7 +85,6 @@ void fatalErrorExit(GlobalVariables* vars);
 
 
 // ========= global_variables.c =========
-
 // #include "global_variables.h"
 
 int initGlobalVars(GlobalVariables* vars) {
@@ -175,7 +172,6 @@ void addArgsAmount(GlobalVariables* vars, char* args[]) {
     vars->successArgument += count - 1;
     vars->successCommand++;
 }
-
 
 
 // ========= commands.h =========
