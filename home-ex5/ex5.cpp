@@ -46,10 +46,6 @@ public:
     }
 
     // YOUR CODE......
-
-    ~fsInode() {
-
-    }
 };
 
 // ============================================================================
@@ -62,7 +58,6 @@ public:
         file.first = FileName;
         file.second = fsi;
         inUse = true;
-
     }
 
     string getFileName() {
@@ -118,7 +113,6 @@ public:
             assert(ret_val == 1);
         }
         fflush(sim_disk_fd);
-
     }
 
     // ------------------------------------------------------------------------
@@ -141,7 +135,10 @@ public:
 
     // ------------------------------------------------------------------------
     void fsFormat(int blockSize = 4, int direct_Enteris_ = 3) {
+        this->BitVectorSize = DISK_SIZE / blockSize;
+        this->BitVector = new int[this->BitVectorSize];
 
+        this->sim_disk_fd = fopen(DISK_SIM_FILE, "rw");
     }
 
     // ------------------------------------------------------------------------
@@ -153,7 +150,6 @@ public:
     int OpenFile(string FileName) {
 
     }
-
 
     // ------------------------------------------------------------------------
     string CloseFile(int fd) {
