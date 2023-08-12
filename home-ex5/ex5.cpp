@@ -32,7 +32,6 @@ class fsInode {
     int doubleInDirect;
     int block_size;
 
-
 public:
     fsInode(int _block_size) {
         fileSize = 0;
@@ -45,7 +44,56 @@ public:
         doubleInDirect = -1;
     }
 
-    // YOUR CODE......
+    int getDirectBlockNumber(int i) {
+        switch (i) {
+        case 0:
+            return this->directBlock1;
+        case 1:
+            return this->directBlock2;
+        case 2:
+            return this->directBlock3;
+        }
+        return -1;
+    }
+
+    void setDirectBlockNumber(int val, int i) {
+        switch (i) {
+        case 0:
+            this->directBlock1 = val;
+        case 1:
+            this->directBlock2 = val;
+        case 2:
+            this->directBlock3 = val;
+        }
+    }
+
+    int getSingleIndirectNumber() {
+        return this->singleInDirect;
+    }
+
+    void setSingleIndirectNumber(int val) {
+        this->singleInDirect = val;
+    }
+
+    int getDoubleIndirectNumber() {
+        return this->doubleInDirect;
+    }
+
+    void setDoubleIndirectNumber(int val) {
+        this->doubleInDirect = val;
+    }
+
+    int getFileSize() {
+        return this->fileSize;
+    }
+
+    void setFileSize(int newSize) {
+        this->fileSize = newSize;
+    }
+
+    int getBlocksInUse() {
+        return this->block_in_use;
+    }
 };
 
 // ============================================================================
@@ -55,32 +103,55 @@ class FileDescriptor {
 
 public:
     FileDescriptor(string FileName, fsInode* fsi) {
-        file.first = FileName;
-        file.second = fsi;
-        inUse = true;
+        this->file.first = FileName;
+        this->file.second = fsi;
+        this->inUse = (fsi != nullptr);
     }
 
     string getFileName() {
-        return file.first;
+        return this->file.first;
     }
 
     fsInode* getInode() {
-        return file.second;
+        return this->file.second;
     }
 
     int getFileSize() {
+        if (this->file.second == nullptr)
+            return 0;
+        return this->file.second->getFileSize();
     }
 
     bool isInUse() {
-        return (inUse);
+        return (this->inUse);
     }
 
     void setInUse(bool _inUse) {
-        inUse = _inUse;
+        this->inUse = _inUse;
     }
 };
 
+FileDescriptor NULL_FD("", nullptr);
+
 #define DISK_SIM_FILE "DISK_SIM_FILE.txt"
+
+// vec toString
+ostream& operator<<(ostream& os, const vector<int>& vec) {
+    os << "[";
+    if (vec.size() == 0) {
+        os << "]";
+        return os;
+    }
+    for (auto it = vec.begin(); it != vec.end(); it++) {
+        if (it != vec.begin()) {
+            os << ",";
+        }
+        os << *it;
+    }
+    os << "]";
+    return os;
+}
+
 // ============================================================================
 class fsDisk {
     FILE* sim_disk_fd;
@@ -93,6 +164,8 @@ class fsDisk {
     int BitVectorSize;
     int* BitVector;
 
+    int currentBlockSize;
+
     // Unix directories are lists of association structures, 
     // each of which contains one filename and one inode number.
     map<string, fsInode*>  MainDir;
@@ -102,16 +175,107 @@ class fsDisk {
     // This entry number is the file descriptor. 
     vector< FileDescriptor > OpenFileDescriptors;
 
+    void deallocMemory(vector<int> arr) {
+        for (int i = 0; i < arr.size(); i++) {
+            BitVector[arr[i]] = 0;
+        }
+    }
+
+    vector<int> allocMemory(int num) {
+        vector<int> res;
+        int count = 0;
+        for (int i = 0; count < num && i < BitVectorSize; i++) {
+            if (BitVector[i] == 0) {
+                res.push_back(i);
+                count++;
+                BitVector[i] = 1;
+            }
+        }
+
+        if (res.size() < num) {
+            this->deallocMemory(res);
+            res.clear();
+        }
+
+        return res;
+    }
+
+    vector<char> readDataByBlock(int blockNumber) {
+        vector<char> res;
+        if (blockNumber < 0 || blockNumber >= this->BitVectorSize) {
+            return res;
+        }
+
+        assert(sim_disk_fd);
+        char buffy[DISK_SIZE] = { 0 };
+        int index = blockNumber * this->currentBlockSize;
+
+        int ret_val = fseek(sim_disk_fd, index, SEEK_SET);
+        ret_val = fread(buffy, 1, this->currentBlockSize, sim_disk_fd);
+        assert(ret_val == 1);
+
+        for (int i = 0; i < this->currentBlockSize; i++) {
+            res.push_back(buffy[i]);
+        }
+        return res;
+    }
+
+    char readDataByBlockAndOffset(int blockNumber, int offset = 0) {
+        if (offset < 0 || offset >= this->currentBlockSize) {
+            return 0;
+        }
+        vector<char> blockData = this->readDataByBlock(blockNumber);
+        if (blockData.size() <= offset) {
+            return 0;
+        }
+        return blockData[offset];
+    }
+
+    void writeDataByBlock(vector<char> newBlock, int blockNumber) {
+        if (blockNumber < 0 || blockNumber >= this->BitVectorSize) {
+            return;
+        }
+
+        char buffy[DISK_SIZE] = { 0 };
+        for (int i = 0; i < this->currentBlockSize && i < newBlock.size(); i++) {
+            buffy[i] = newBlock[i];
+        }
+
+        assert(sim_disk_fd);
+        int index = blockNumber * this->currentBlockSize;
+        int ret_val = fseek(sim_disk_fd, index, SEEK_SET);
+        ret_val = fwrite(buffy, 1, this->currentBlockSize, sim_disk_fd);
+        assert(ret_val == 1);
+        fflush(sim_disk_fd);
+        return;
+    }
+
+    void writeDataByBlockAndOffset(char data, int blockNumber, int offset = 0) {
+        if (blockNumber < 0 || blockNumber >= this->BitVectorSize || offset < 0 || offset >= this->currentBlockSize) {
+            return;
+        }
+        vector<char> newData = this->readDataByBlock(blockNumber);
+        newData[offset] = data;
+        this->writeDataByBlock(newData, blockNumber);
+    }
+
 public:
 // ------------------------------------------------------------------------
     fsDisk() {
-        sim_disk_fd = fopen(DISK_SIM_FILE, "r+");
+        sim_disk_fd = fopen(DISK_SIM_FILE, "a+");
+
+        this->fillBlanksDisk();
+        this->is_formated = false;
+    }
+
+    void fillBlanksDisk() {
         assert(sim_disk_fd);
-        for (int i = 0; i < DISK_SIZE; i++) {
-            int ret_val = fseek(sim_disk_fd, i, SEEK_SET);
-            ret_val = fwrite("\0", 1, 1, sim_disk_fd);
-            assert(ret_val == 1);
-        }
+        char buffy[DISK_SIZE] = { '\0' };
+
+        int ret_val = fseek(sim_disk_fd, 0, SEEK_SET);
+        ret_val = fwrite(buffy, 1, DISK_SIZE, sim_disk_fd);
+        assert(ret_val == DISK_SIZE);
+
         fflush(sim_disk_fd);
     }
 
@@ -123,6 +287,7 @@ public:
                 << it->isInUse() << " file Size: " << it->getFileSize() << endl;
             i++;
         }
+
         char bufy;
         cout << "Disk content: '";
         for (i = 0; i < DISK_SIZE; i++) {
@@ -134,53 +299,86 @@ public:
     }
 
     // ------------------------------------------------------------------------
-    void fsFormat(int blockSize = 4, int direct_Enteris_ = 3) {
+    void fsFormat(int blockSize = 4) {
+        if (this->BitVector != nullptr) {
+            delete[] this->BitVector;
+        }
+        this->currentBlockSize = blockSize;
         this->BitVectorSize = DISK_SIZE / blockSize;
         this->BitVector = new int[this->BitVectorSize];
-
-        this->sim_disk_fd = fopen(DISK_SIM_FILE, "rw");
+        this->is_formated = true;
     }
 
     // ------------------------------------------------------------------------
     int CreateFile(string fileName) {
+        if (!this->is_formated) {
+            cout << "disk not formatted" << endl;
+            return -1;
+        }
 
+        if (this->MainDir.count(fileName) != 0) {
+            cout << "file already exists" << endl;
+            return -1;
+        }
+
+        fsInode* fsi = new fsInode(this->currentBlockSize);
+        FileDescriptor fd(fileName, fsi);
+
+        this->MainDir[fileName] = fsi;
+        this->OpenFileDescriptors.push_back(fd);
+
+        return this->OpenFileDescriptors.size() - 1;
     }
 
     // ------------------------------------------------------------------------
     int OpenFile(string FileName) {
-
+        return 0;
     }
 
     // ------------------------------------------------------------------------
     string CloseFile(int fd) {
-
+        return 0;
     }
 
     // ------------------------------------------------------------------------
     int WriteToFile(int fd, char* buf, int len) {
+        if (fd < 0 || fd >= this->OpenFileDescriptors.size()) {
+            cout << "no such open file" << endl;
+            return -1;
+        }
+        
+        return 0;
     }
 
     // ------------------------------------------------------------------------
     int DelFile(string FileName) {
-
+        return 0;
     }
 
     // ------------------------------------------------------------------------
     int ReadFromFile(int fd, char* buf, int len) {
+        return 0;
     }
 
     // ------------------------------------------------------------------------
     int getFileSize(int fd) {
+        return 0;
     }
 
     // ------------------------------------------------------------------------
-    int CopyFile(string srcFileName, string destFileName) {}
+    int CopyFile(string srcFileName, string destFileName) {
+        return 0;
+    }
 
     // ------------------------------------------------------------------------
-    int MoveFile(string srcFileName, string destFileName) {}
+    int MoveFile(string srcFileName, string destFileName) {
+        return 0;
+    }
 
     // ------------------------------------------------------------------------
-    int RenameFile(string oldFileName, string newFileName) {}
+    int RenameFile(string oldFileName, string newFileName) {
+        return 0;
+    }
 
 };
 
@@ -211,7 +409,7 @@ int main() {
         case 2:    // format
             cin >> blockSize;
             cin >> direct_entries;
-            fs->fsFormat(blockSize, direct_entries);
+            fs->fsFormat(blockSize);
             break;
 
         case 3:    // creat-file
@@ -268,3 +466,4 @@ int main() {
         }
     }
 }
+
