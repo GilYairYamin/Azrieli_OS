@@ -3,11 +3,12 @@
 #include <map>
 #include <assert.h>
 #include <string.h>
-#include <math.h>
+#include <cmath>
 #include <sys/types.h>
 #include <unistd.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <queue>
 
 using namespace std;
 
@@ -129,6 +130,16 @@ public:
     void setInUse(bool _inUse) {
         this->inUse = _inUse;
     }
+
+    bool operator==(const FileDescriptor& other) {
+        if (this->file.first == other.file.first && this->file.second == other.file.second)
+            return true;
+        return false;
+    }
+
+    bool operator!=(const FileDescriptor& other) {
+        return !this->operator==(other);
+    }
 };
 
 FileDescriptor NULL_FD("", nullptr);
@@ -174,6 +185,8 @@ class fsDisk {
     // the operating system creates an entry to represent that file
     // This entry number is the file descriptor. 
     vector< FileDescriptor > OpenFileDescriptors;
+
+    queue<int> fdNullPointers;
 
     void deallocMemory(vector<int> arr) {
         for (int i = 0; i < arr.size(); i++) {
@@ -231,6 +244,12 @@ class fsDisk {
         return blockData[offset];
     }
 
+    char readDataByByteIndex(int index) {
+        int blockNumber = index / this->currentBlockSize;
+        int offset = index % this->currentBlockSize;
+        return this->readDataByBlockAndOffset(blockNumber, offset);
+    }
+
     void writeDataByBlock(vector<char> newBlock, int blockNumber) {
         if (blockNumber < 0 || blockNumber >= this->BitVectorSize) {
             return;
@@ -259,11 +278,56 @@ class fsDisk {
         this->writeDataByBlock(newData, blockNumber);
     }
 
+    void writeDataByByteIndex(char data, int index) {
+        int blockNumber = index / this->currentBlockSize;
+        int offset = index % this->currentBlockSize;
+        this->writeDataByBlockAndOffset(data, blockNumber, offset);
+    }
+
+    bool isDiskFormatted() {
+        if (!this->is_formated) {
+            cout << "disk not formatted yet" << endl;
+            return false;
+        }
+        return true;
+    }
+
+    int getMaxDataBlocksAllocatableForFile() {
+        return 3 + this->currentBlockSize * (1 + this->currentBlockSize);
+    }
+
+    int getMaxFileSize() {
+        return this->currentBlockSize * this->getMaxDataBlocksAllocatableForFile();
+    }
+
+    int getAmountOfBlocksNeededForFileSize(int fileSize) {
+        if (fileSize > this->getMaxFileSize())
+            return -1;
+        int directAmount = 3;
+        int maxIndirect = 2;
+
+        int neededDataBlocks = fileSize / this->currentBlockSize;
+        int res = neededDataBlocks;
+
+        if (neededDataBlocks <= directAmount)
+            return res;
+
+        neededDataBlocks -= directAmount;
+        res += 1;
+
+        if (neededDataBlocks <= this->currentBlockSize)
+            return res;
+
+        neededDataBlocks -= this->currentBlockSize;
+        res += 1 + neededDataBlocks / this->currentBlockSize;
+
+        return res;
+    }
+
 public:
 // ------------------------------------------------------------------------
     fsDisk() {
         sim_disk_fd = fopen(DISK_SIM_FILE, "a+");
-
         this->fillBlanksDisk();
         this->is_formated = false;
     }
@@ -311,10 +375,9 @@ public:
 
     // ------------------------------------------------------------------------
     int CreateFile(string fileName) {
-        if (!this->is_formated) {
-            cout << "disk not formatted" << endl;
+        if (!this->isDiskFormatted())
             return -1;
-        }
+
 
         if (this->MainDir.count(fileName) != 0) {
             cout << "file already exists" << endl;
@@ -325,61 +388,135 @@ public:
         FileDescriptor fd(fileName, fsi);
 
         this->MainDir[fileName] = fsi;
-        this->OpenFileDescriptors.push_back(fd);
-
-        return this->OpenFileDescriptors.size() - 1;
+        return this->OpenFile(fileName);
     }
 
     // ------------------------------------------------------------------------
     int OpenFile(string FileName) {
-        return 0;
+        if (!this->isDiskFormatted())
+            return -1;
+
+        if (this->MainDir.find(FileName) == this->MainDir.end()) {
+            cout << "no file with such name" << endl;
+            return -1;
+        }
+
+        for (int i = 0; i < this->OpenFileDescriptors.size(); i++) {
+            if (this->OpenFileDescriptors[i] != NULL_FD && this->OpenFileDescriptors[i].getFileName() == FileName) {
+                cout << "file already open" << endl;
+                return i;
+            }
+        }
+
+        FileDescriptor fd(FileName, this->MainDir[FileName]);
+        int fdNum = this->OpenFileDescriptors.size();
+
+        if (this->fdNullPointers.size() > 0) {
+            int temp = this->fdNullPointers.front();
+            fdNum = temp;
+            this->fdNullPointers.pop();
+            this->OpenFileDescriptors[fdNum] = fd;
+        }
+        else {
+            this->OpenFileDescriptors.push_back(fd);
+        }
+
+        return fdNum;
     }
 
     // ------------------------------------------------------------------------
     string CloseFile(int fd) {
-        return 0;
+        if (!this->isDiskFormatted())
+            return "-1";
+
+        if (fd < 0 || fd >= this->OpenFileDescriptors.size() || this->OpenFileDescriptors[fd] == NULL_FD) {
+            cout << "file isn't open" << endl;
+            return "-1";
+        }
+
+        this->OpenFileDescriptors[fd] = NULL_FD;
+        fdNullPointers.push(fd);
+
+        return "aye";
     }
 
     // ------------------------------------------------------------------------
     int WriteToFile(int fd, char* buf, int len) {
-        if (fd < 0 || fd >= this->OpenFileDescriptors.size()) {
+        if (!this->isDiskFormatted())
+            return -1;
+
+        if (fd < 0 || fd >= this->OpenFileDescriptors.size() || this->OpenFileDescriptors[fd] == NULL_FD) {
             cout << "no such open file" << endl;
             return -1;
         }
+
         
+
         return 0;
     }
 
     // ------------------------------------------------------------------------
     int DelFile(string FileName) {
+        if (!this->isDiskFormatted())
+            return -1;
         return 0;
     }
 
     // ------------------------------------------------------------------------
     int ReadFromFile(int fd, char* buf, int len) {
+        if (!this->isDiskFormatted())
+            return -1;
+
+        if (fd < 0 || fd >= this->OpenFileDescriptors.size() || this->OpenFileDescriptors[fd] == NULL_FD) {
+            cout << "no such file descriptor" << endl;
+            return -1;
+        }
+        fsInode* fsi = this->OpenFileDescriptors[fd].getInode();
+
+        int currentFileSize = fsi->getFileSize();
+        int maxBlockAmount = this->getMaxDataBlocksAllocatableForFile();
+
+        if ((currentFileSize + len) / this->currentBlockSize > maxBlockAmount) {
+            cout << "not enough space in file" << endl;
+            return -1;
+        }
+
+        vector<char> buffy(buf, buf + len);
+
         return 0;
     }
 
     // ------------------------------------------------------------------------
     int getFileSize(int fd) {
+        if (!this->isDiskFormatted())
+            return -1;
         return 0;
     }
 
     // ------------------------------------------------------------------------
     int CopyFile(string srcFileName, string destFileName) {
+        if (!this->isDiskFormatted())
+            return -1;
         return 0;
     }
 
     // ------------------------------------------------------------------------
     int MoveFile(string srcFileName, string destFileName) {
+        if (!this->isDiskFormatted())
+            return -1;
         return 0;
     }
 
     // ------------------------------------------------------------------------
     int RenameFile(string oldFileName, string newFileName) {
+        if (!this->isDiskFormatted())
+            return -1;
         return 0;
     }
 
+    ~fsDisk() {
+        fclose(sim_disk_fd);
+    }
 };
 
 int main() {
