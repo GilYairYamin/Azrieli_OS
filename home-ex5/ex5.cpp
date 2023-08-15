@@ -3,11 +3,12 @@
 #include <map>
 #include <assert.h>
 #include <string.h>
-#include <math.h>
+#include <cmath>
 #include <sys/types.h>
 #include <unistd.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <queue>
 
 using namespace std;
 
@@ -60,7 +61,6 @@ public:
         file.first = FileName;
         file.second = fsi;
         inUse = true;
-
     }
 
     string getFileName() {
@@ -78,10 +78,27 @@ public:
     bool isInUse() {
         return (inUse);
     }
+
     void setInUse(bool _inUse) {
         inUse = _inUse;
     }
+
+    FileDescriptor& operator= (const FileDescriptor& fd) {
+        this->file.first = fd.file.first;
+        this->file.second = fd.file.second;
+        this->inUse = fd.inUse;
+    }
+
+    bool operator==(const FileDescriptor& other) {
+        return this->file.first == other.file.first && this->file.second == other.file.second && this->inUse == other.inUse;
+    }
+
+    bool operator!=(const FileDescriptor& other) {
+        return !(*this == other);
+    }
 };
+
+FileDescriptor NULL_FD("", nullptr);
 
 ostream& operator<<(ostream& os, const vector<char>& dt) {
     for (auto it = dt.begin(); it != dt.end(); it++) {
@@ -90,7 +107,7 @@ ostream& operator<<(ostream& os, const vector<char>& dt) {
     return os;
 }
 
-ostream& operator<<(ostream& os, vector<FileDescriptor> dt) {
+ostream& operator<<(ostream& os, vector<FileDescriptor>& dt) {
     int i = 0;
     for (auto it = dt.begin(); it != dt.end(); it++) {
         os << "index: " << i << ": FileName: " << it->getFileName() << " , isInUse: "
@@ -103,10 +120,34 @@ ostream& operator<<(ostream& os, vector<FileDescriptor> dt) {
 #define DISK_SIM_FILE "DISK_SIM_FILE.txt"
 // ============================================================================
 class fsDisk {
+    FILE* sim_disk_fd;
+    bool is_formated;
+
+    // BitVector - "bit" (int) vector, indicate which block in the disk is free
+    //              or not.  (i.e. if BitVector[0] == 1 , means that the 
+    //             first block is occupied. 
+    int BitVectorSize;
+    bool* BitVector;
+
+    int block_size;
+
+    // Unix directories are lists of association structures, 
+    // each of which contains one filename and one inode number.
+    map<string, fsInode*>  MainDir;
+
+    // OpenFileDescriptors --  when you open a file, 
+    // the operating system creates an entry to represent that file
+    // This entry number is the file descriptor. 
+    vector< FileDescriptor > OpenFileDescriptors;
+    queue<int> existingFdsNotInUse;
+
 public:
 // ------------------------------------------------------------------------
     fsDisk() {
-        sim_disk_fd = fopen(DISK_SIM_FILE, "w+");
+        sim_disk_fd = fopen(DISK_SIM_FILE, "r+");
+        if (!sim_disk_fd) {
+            sim_disk_fd = fopen(DISK_SIM_FILE, "w+");
+        }
         assert(sim_disk_fd);
 
         char data[DISK_SIZE] = { '\0' };
@@ -133,12 +174,14 @@ public:
     void fsFormat(int blockSize = 4, int direct_Enteris_ = 3) {
         direct_Enteris_ = 3;
 
+        this->block_size = block_size;
+
         if (this->is_formated) {
             delete[] this->BitVector;
         }
 
         this->BitVectorSize = DISK_SIZE / blockSize;
-        this->BitVector = new int[this->BitVectorSize];
+        this->BitVector = new bool[this->BitVectorSize];
 
         this->is_formated = true;
     }
@@ -147,25 +190,62 @@ public:
     int CreateFile(string fileName) {
         if (!this->isDiskFormatted())
             return -1;
-        return 0;
+
+        if (MainDir.find(fileName) != MainDir.end()) {
+            cout << "file already exists" << endl;
+            return -1;
+        }
+
+        fsInode* fsi = new fsInode(this->block_size);
+        MainDir[fileName] = fsi;
+
+        return OpenFile(fileName);
     }
 
     // ------------------------------------------------------------------------
-    int OpenFile(string FileName) {
+    int OpenFile(string fileName) {
         if (!this->isDiskFormatted())
             return -1;
-        return 0;
+
+        if (MainDir.find(fileName) != MainDir.end()) {
+            cout << "file already exists" << endl;
+            return -1;
+        }
+
+        for (int i = 0; i < OpenFileDescriptors.size(); i++) {
+            if (fileName == OpenFileDescriptors[i].getFileName()) {
+                cout << "file already open" << endl;
+                return i;
+            }
+        }
+
+        FileDescriptor newFd(fileName, MainDir[fileName]);
+        int newFdNum = 0;
+        if (existingFdsNotInUse.size() > 0) {
+            newFdNum = existingFdsNotInUse.front();
+            existingFdsNotInUse.pop();
+            OpenFileDescriptors[newFdNum] = newFd;
+        }
+        else {
+            newFdNum = OpenFileDescriptors.size();
+            OpenFileDescriptors[newFdNum] = newFd;
+        }
+        return newFdNum;
     }
 
     // ------------------------------------------------------------------------
     string CloseFile(int fd) {
-        if (!this->isDiskFormatted())
+        if (!this->isDiskFormatted() || !this->doesFileDescriptorExist(fd))
             return "-1";
-        return "0";
+
+        string fileName = OpenFileDescriptors[fd].getFileName();
+        OpenFileDescriptors[fd] = NULL_FD;
+        existingFdsNotInUse.push(fd);
+        return fileName;
     }
     // ------------------------------------------------------------------------
     int WriteToFile(int fd, char* buf, int len) {
-        if (!this->isDiskFormatted())
+        if (!this->isDiskFormatted() || !this->doesFileDescriptorExist(fd))
             return -1;
         return 0;
     }
@@ -173,20 +253,25 @@ public:
     int DelFile(string FileName) {
         if (!this->isDiskFormatted())
             return -1;
-        return 0;
+
+        if (findFileDescriptorByName(FileName) >= 0) {
+            cout << "file is open and in use, therefore it cannot be deleted" << endl;
+            return -1;
+        }
     }
     // ------------------------------------------------------------------------
     int ReadFromFile(int fd, char* buf, int len) {
-        if (!this->isDiskFormatted())
+        if (!this->isDiskFormatted() || !this->doesFileDescriptorExist(fd))
             return -1;
         return 0;
     }
 
     // ------------------------------------------------------------------------
     int getFileSize(int fd) {
-        if (!this->isDiskFormatted())
+        if (!this->isDiskFormatted() || !this->doesFileDescriptorExist(fd))
             return -1;
-        return 0;
+
+        return OpenFileDescriptors[fd].getFileSize();
     }
 
     // ------------------------------------------------------------------------
@@ -197,45 +282,47 @@ public:
     }
 
     // ------------------------------------------------------------------------
-    int MoveFile(string srcFileName, string destFileName) {
-        if (!this->isDiskFormatted())
-            return -1;
-        return 0;
-    }
-
-    // ------------------------------------------------------------------------
     int RenameFile(string oldFileName, string newFileName) {
         if (!this->isDiskFormatted())
             return -1;
+
         return 0;
     }
 
 private:
-    FILE* sim_disk_fd;
-
-    bool is_formated;
-
-    // BitVector - "bit" (int) vector, indicate which block in the disk is free
-    //              or not.  (i.e. if BitVector[0] == 1 , means that the 
-    //             first block is occupied. 
-    int BitVectorSize;
-    int* BitVector;
-
-    // Unix directories are lists of association structures, 
-    // each of which contains one filename and one inode number.
-    map<string, fsInode*>  MainDir;
-
-    // OpenFileDescriptors --  when you open a file, 
-    // the operating system creates an entry to represent that file
-    // This entry number is the file descriptor. 
-    vector< FileDescriptor > OpenFileDescriptors;
-
     bool isDiskFormatted() {
         if (this->is_formated) {
             return true;
         }
         cout << "Disk not formatted" << endl;
         return false;
+    }
+
+    int findFileDescriptorByName(string fileName) {
+        for (int i = 0; i < OpenFileDescriptors.size(); i++) {
+            if (OpenFileDescriptors[i].getFileName() == fileName) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    bool doesFileDescriptorExist(int fd) {
+        if (!doesFileDescriptorExistNoMessage(fd)) {
+            cout << "no such file descriptor" << endl;
+            return false;
+        }
+        return true;
+    }
+
+    bool doesFileDescriptorExistNoMessage(int fd) {
+        return fd < 0 || fd >= OpenFileDescriptors.size() || OpenFileDescriptors[fd] == NULL_FD;
+    }
+
+    vector<char> readBlockFromDisk(int blockIndex) {
+        int index = blockIndex * block_size;
+        int len = block_size;
+        return readVectorFromDisk(index, len);
     }
 
     vector<char> readVectorFromDisk(int index, int len) {
@@ -254,6 +341,12 @@ private:
         int ret_val = fread(&res, 1, 1, sim_disk_fd);
         assert(ret_val == 1);
         return res;
+    }
+
+    void writeBlockToDisk(vector<char> data, int blockIndex) {
+        int index = blockIndex * this->block_size;
+        int len = this->block_size;
+        writeVectorToDisk(data, index, len);
     }
 
     void writeVectorToDisk(vector<char> data, int index, int len) {
