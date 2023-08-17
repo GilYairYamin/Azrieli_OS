@@ -13,6 +13,8 @@
 using namespace std;
 
 #define DISK_SIZE 512
+#define DIRECT_BLOCK_AMOUNT 3
+#define INDIRECT_MAX_LEVEL 2
 
 // Function to convert decimal to binary char
 char decToBinary(int n) {
@@ -48,7 +50,72 @@ public:
     }
 
     // YOUR CODE......
+    int getFileSize() {
+        return this->fileSize;
+    }
 
+    int getDataBlocksAmount() {
+
+    }
+
+    int getBlockInUse() {
+        return this->block_in_use;
+    }
+
+    int getDirectBlock(int blockNumber) {
+        switch (blockNumber) {
+        case 0:
+            return this->directBlock1;
+        case 1:
+            return this->directBlock2;
+        case 2:
+            return this->directBlock3;
+        default:
+        }
+        return -1;
+    }
+    void setDirectBlock(int blockNumber, int directBlockNumber) {
+        switch (directBlockNumber) {
+        case 0:
+            this->directBlock1 = blockNumber;
+            break;
+        case 1:
+            this->directBlock2 = blockNumber;
+            break;
+        case 2:
+            this->directBlock3 = blockNumber;
+            break;
+        default:
+            return;
+        }
+    }
+
+    void increaseBlockNumber(int add) {
+        this->block_in_use += add;
+    }
+
+    int getIndirectBlockNumber(int indirectLevel) {
+        switch (indirectLevel) {
+        case 1:
+            return this->singleInDirect;
+        case 2:
+            return this->doubleInDirect;
+        default:
+        }
+        return -1;
+    }
+
+    void setIndirectBlockNumber(int blockNumber, int indirectLevel) {
+        switch (indirectLevel) {
+        case 1:
+            this->singleInDirect = blockNumber;
+            break;
+        case 2:
+            this->doubleInDirect = blockNumber;
+            break;
+        default:
+        }
+    }
 };
 
 // ============================================================================
@@ -176,12 +243,19 @@ public:
 
         this->block_size = block_size;
 
+        for (auto it = MainDir.begin(); it != MainDir.end(); it++) {
+            delete it->second;
+        }
+        MainDir.clear();
+
         if (this->is_formated) {
             delete[] this->BitVector;
         }
 
         this->BitVectorSize = DISK_SIZE / blockSize;
         this->BitVector = new bool[this->BitVectorSize];
+
+        OpenFileDescriptors.clear();
 
         this->is_formated = true;
     }
@@ -285,11 +359,75 @@ public:
     int RenameFile(string oldFileName, string newFileName) {
         if (!this->isDiskFormatted())
             return -1;
-
         return 0;
     }
 
 private:
+    bool allocateSpaceForFile(fsInode* fsi, int newDataLen) {
+        int newDataBlockAmount = (fsi->getFileSize() + newDataLen) / this->block_size;
+        if (newDataBlockAmount > getMaxDataBlocksInFile()) {
+            cout << "file cannot be that big" << endl;
+            return false;
+        }
+
+        int currentDataBlockAmount = fsi->getDataBlocksAmount();
+        if (newDataBlockAmount - currentDataBlockAmount <= 0)
+            return true;
+
+        int currentActualBlocks = getActualBlockAmoundNeededByDataBlockAmount(currentDataBlockAmount);
+        int newActualBlocks = getActualBlockAmoundNeededByDataBlockAmount(newDataBlockAmount);
+
+        int allocateBlockAmount = newActualBlocks - currentActualBlocks;
+    }
+
+    int getActualBlockAmoundNeededByDataBlockAmount(int dataBlockAmount) {
+        if (dataBlockAmount <= DIRECT_BLOCK_AMOUNT) {
+            return dataBlockAmount;
+        }
+        int count = DIRECT_BLOCK_AMOUNT;
+        int dataBlockAmountLeft = dataBlockAmount - count;
+        int possibleDataBlocks = this->block_size;
+        int temp = possibleDataBlocks;
+
+        int addedDataBlocks, addedNonDataBlocks;
+        for (int level = 1; level <= INDIRECT_MAX_LEVEL; level++) {
+            addedDataBlocks = min(dataBlockAmountLeft, possibleDataBlocks);
+            addedNonDataBlocks = (addedDataBlocks + this->block_size - 1) / this->block_size; // round up division
+
+            /*
+            add to count the amount of data blocks we need to add.
+            */
+            count += addedDataBlocks;
+            /*
+            count the amount of indirect blocks in the rest of the indirect tree.
+            */
+            for (int i = level; i >= 1; i--) {
+                count += addedNonDataBlocks;
+                addedNonDataBlocks = (addedNonDataBlocks + this->block_size - 1) / this->block_size; // round up division
+            }
+
+            dataBlockAmountLeft -= possibleDataBlocks;
+            if (dataBlockAmountLeft <= 0) {
+                return count;
+            }
+        }
+        return -1;
+    }
+
+    int getMaxFileSize() {
+        return getMaxDataBlocksInFile() * this->block_size;
+    }
+
+    int getMaxDataBlocksInFile() {
+        int count = DIRECT_BLOCK_AMOUNT;
+        int temp = this->block_size;
+        for (int level = 1; level <= INDIRECT_MAX_LEVEL; level++) {
+            count += temp;
+            temp *= this->block_size;
+        }
+        return count;
+    }
+
     bool isDiskFormatted() {
         if (this->is_formated) {
             return true;
@@ -316,7 +454,54 @@ private:
     }
 
     bool doesFileDescriptorExistNoMessage(int fd) {
-        return fd < 0 || fd >= OpenFileDescriptors.size() || OpenFileDescriptors[fd] == NULL_FD;
+        return fd >= 0 && fd < OpenFileDescriptors.size() && OpenFileDescriptors[fd] != NULL_FD;
+    }
+
+    int getBlockByBlockNumber(fsInode* fsi, int blockNumber) {
+        if (blockNumber < 0 || blockNumber >= fsi->getBlockInUse()) {
+            return -500;
+        }
+        if (blockNumber < DIRECT_BLOCK_AMOUNT) {
+            return fsi->getDirectBlock(blockNumber);
+        }
+
+        blockNumber -= block_size;
+
+    }
+
+    vector<char> allocateBlocks(int blocksAmount) {
+        vector<char> res;
+        if (blocksAmount <= 0)
+            return res;
+
+        for (int i = 0; i < BitVectorSize; i++) {
+            if (BitVector[i] == false) {
+                BitVector[i] = true;
+                res.push_back(i);
+                if (res.size() >= blocksAmount)
+                    return res;
+            }
+        }
+        cout << "cannot allocate, too many blocks needed" << endl;
+
+        freeBlocks(res);
+        res.clear();
+        return res;
+    }
+
+    void freeBlocks(vector<char> blocksToFree) {
+        for (auto it = blocksToFree.begin(); it != blocksToFree.end(); it++) {
+            if (*it < 0 || *it > BitVectorSize)
+                continue;
+            BitVector[*it] = false;
+        }
+    }
+
+
+    char readDataByBlockAndOffset(int blockNumber, int offset) {
+        if (offset < 0 || offset >= this->block_size || blockNumber < 1 || blockNumber > BitVectorSize)
+            return 0;
+        return readCharFromDisk((blockNumber - 1) * block_size + offset);
     }
 
     vector<char> readBlockFromDisk(int blockIndex) {
@@ -341,6 +526,12 @@ private:
         int ret_val = fread(&res, 1, 1, sim_disk_fd);
         assert(ret_val == 1);
         return res;
+    }
+
+    void writeCharToBlockAndOffset(char data, int blockNumber, int offset) {
+        if (offset < 0 || offset >= this->block_size || blockNumber < 1 || blockNumber > BitVectorSize)
+            return;
+        writeToDiskAtIndex(data, (blockNumber - 1) * block_size + offset);
     }
 
     void writeBlockToDisk(vector<char> data, int blockIndex) {
