@@ -1,21 +1,37 @@
-A simplified program simulating memory management of the unix operating system.
-It recieves simple inputs and performs memory operations like creating files, writing, reading, and so on, based on how unix system do it today.
-No directory management though, there is only one directory in this system.
+# Unix-like File System Simulator (C++)
 
-To start the program simply compile the stub_code.cpp file and run the execution file resulted.
+A user-space implementation of an Inode-based file system. This project simulates a physical disk using a flat file and implements a complete Virtual File System (VFS) layer, handling block allocation, inode indexing, and persistent storage.
 
-Basically there are 10 commands you can use:
+## 🚀 Key Features
 
-0 - exit.\
-1 - list all open file descriptors and print the content of the disk.\
-2 - format the disk, will request the size of blocks in the formatted disk.\
-3 - create a file, will request the name of the file, and will return its file descriptor.\
-4 - open an existing file, will request the name of the file, and return its file descriptor.\
-5 - close an open file, will request the file descriptor of the file.\
-6 - write to an open file, will reuqest the file descriptor of the file and the string to write into it.\
-7 - read from an open file, will request the file descriptor of the file and length of reading, will return the read content from the file.\
-8 - delete a file which is not open, will request the name of the file.\
-9 - copy a file, will request the name of the source file, and the name of the destination file.\
-10 - change the name of a file, will request the current name, and the new name.
+- **Inode Architecture:** Implements a multi-level indexing structure:
+  - **3 Direct Blocks:** For fast access to small files.
+  - **Single Indirect:** For medium files.
+  - **Double Indirect:** For large files, creating a tree-like block structure.
+- **Disk Management:**
+  - **BitVector Allocation:** Tracks free/busy disk blocks using an optimized integer array.
+  - **Persistence:** Simulates a physical disk drive using `DISK_SIM_FILE.txt`, allowing data to persist between program runs.
+- **File Operations:** Supports `Create`, `Open`, `Close`, `Read`, `Write`, `Delete` (with block reclamation), `Copy`, and `Rename`.
+- **Directory Entry:** Manages a flat directory structure mapping filenames to Inode pointers.
 
-The prompts are very simplified, and if you accidentally put illegal input types (like a letter where the program expects a number), infinite loops and crashes may happen.
+## 🛠 Technical Architecture
+
+### The Inode Structure
+
+The core logic resides in the `fsInode` class, which abstracts the physical block layout.
+
+- **Mixed Indexing:** To optimize for both small and large files, the system uses a hybrid approach. Small writes go directly to pointers 0-2. Large writes trigger the allocation of pointer blocks (Indirect), which store addresses of data blocks rather than data itself.
+
+### Block Allocation
+
+- **Formatting:** When `fsFormat` is called, the system initializes a **BitVector**.
+- **Writing:** The `allocateBlocks` function scans the BitVector for contiguous zero-bits to satisfy write requests.
+- **Reclamation:** When `DelFile` is called, the system traverses the Inode tree (Direct -> Indirect -> Double Indirect) to identify every block used by the file and flips their bits back to 0 in the BitVector.
+
+## 💻 Usage
+
+### Compilation
+
+```bash
+g++ -o fs_sim stub_code.cpp
+```

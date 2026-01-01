@@ -1,53 +1,42 @@
-# Third Exercise in Operating System Course.
+# Virtual Memory Management Simulator (MMU)
 
-# === Description ===
+A low-level C++ simulation of a Memory Management Unit (MMU), implementing Demand Paging, Two-Level Page Tables, and Swap mechanisms. This system intercepts logical memory accesses and translates them to physical addresses, handling page faults and disk I/O transparently.
 
-This program emulates a memory allocation system run by an operating system.
+## 🚀 Key Features
 
-# === files ===
+- **Address Translation:** Implements bitwise logic to decompose logical addresses into **Outer Page**, **Inner Page**, and **Offset** components using dynamic bitmasks.
+- **Demand Paging:** Loads pages lazily from the executable file (text/data) or swap file (stack/heap) only when accessed.
+- **Page Replacement Policy:** Implements a custom **Least Recently Used (LRU)** queue to manage frame eviction when physical memory is full.
+- **Memory Protection:** Enforces Read-Only permissions for the Text segment and detects illegal access attempts.
+- **Swap Management:** Handles "dirty" page eviction (write-back policy), persisting modified data to a swap file using POSIX file descriptors.
 
-The sim_mem.h defines the memory system class "sim_mem".
+## 🛠 Technical Architecture
 
-The sim_mem.cpp implements the sim_mem.h class's functions.
+### The Page Table
 
-The main.cpp includes the sim_mem.h, and uses it to simulate store and load commands.
-The one presented here is a simple example with multiple commands to check certain scenarios with this
+The system uses a hierarchical (two-level) page table structure to map logical addresses to physical frames.
 
-# === sim_mem class ===
+- **Valid Bit:** Indicates if the page is currently in RAM.
+- **Dirty Bit:** Tracks if the page has been modified (requires write-back to swap).
+- **Frame Mapping:** Stores the physical frame index.
 
-The sim_mem class represents the memory system.
+### The Workflow
 
-To initialize the memory system you need to use the function:
-sim_mem(<exe_file_name>, <swap_file_name>, <text_size>, <data_size>, <bss_size>, <heap_stack_size>, <page_size>)
+1.  **Intercept:** `load(addr)` or `store(addr, val)` is called.
+2.  **Translate:** The address is masked to find the specific Page Table Entry (PTE).
+3.  **Check:**
+    - _Hit:_ If `valid=1`, access physical RAM immediately.
+    - _Miss (Page Fault):_ If `valid=0`, trigger the Page Fault Handler.
+4.  **Handle Fault:**
+    - Find a free frame (or evict one using **LRU**).
+    - If evicting a "dirty" page, write it to the `swap_file`.
+    - Read the requested page from `exec_file` or `swap_file`.
+    - Update the Page Table and retry the access.
 
-<exe_file_name> - execution file name.
-<swap_file_name> - swap file name.
-<text_size> - text block size.
-<data_size> - data block size.
-<bss_size> - bss block size.
-<heap_stack_size> - heap and stack block size.
-<page_size> - the size of each page and frame.
+## 💻 Usage
 
-store(<address>, <data>) - is used to store data in the memory block based on the address.
+### Compilation
 
-load(<address>) - is used to load data from a specific address.
-
-<address> - represents a logical address in the system, has exactly 12 bits.
-
-print_memory() - prints the current status of the main memory block.
-
-void print_swap() - prints the current status of the swap file.
-
-void print_page_table() - prints the current status of the page table.
-
-# === How to compile ===
-
-Simply run make in the directory, a makefile is provided.
-
-# === How to run ===
-
-Run the main executable file created by the makefile file.
-
-# === Output ===
-
-Depending on the main.cpp file used, should print out the last condition of the memory system.
+```bash
+make all
+```
